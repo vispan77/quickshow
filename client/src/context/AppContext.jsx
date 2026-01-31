@@ -41,7 +41,8 @@ export const AppProvider = ({ children })=>{
             if(data.success){
                 setShows(data.shows)
             }else{
-                toast.error(data.message)
+                toast.error(data.message);
+                console.log("data.message :-" + data.message)
             }
         } catch (error) {
             console.error(error)
