@@ -63,7 +63,7 @@ export const stripeWebhooks = async (request, response) => {
 
     let event;
 
-    // ✅ 1. Verify webhook
+    // ✅ 1. Verify Stripe signature
     try {
         event = stripeInstance.webhooks.constructEvent(
             request.body,
@@ -71,53 +71,60 @@ export const stripeWebhooks = async (request, response) => {
             process.env.STRIPE_WEBHOOK_SECRET
         );
     } catch (error) {
-        console.error("❌ Signature Error:", error.message);
+        console.error("❌ Signature verification failed:", error.message);
         return response.status(400).send(`Webhook Error: ${error.message}`);
     }
 
     try {
         console.log("🔥 Webhook hit:", event.type);
 
-        // ✅ 2. Handle correct event
+        // ✅ 2. ONLY handle correct event
         if (event.type === "checkout.session.completed") {
 
             const session = event.data.object;
 
-            console.log("👉 FULL SESSION:", session);
-
+            // ✅ Extract bookingId safely
             const bookingId = session.metadata?.bookingId;
 
-            console.log("👉 BOOKING ID:", bookingId);
+            console.log("👉 Booking ID:", bookingId);
 
-            // 🚨 VERY IMPORTANT CHECK
             if (!bookingId) {
                 console.error("❌ bookingId missing in metadata");
                 return response.json({ received: true });
             }
 
-            // ✅ 3. Update DB
-            const updatedBooking = await Booking.findByIdAndUpdate(
-                bookingId,
-                {
-                    isPaid: true,
-                    paymentLink: ""
-                },
-                { new: true } // return updated doc
-            );
+            // ✅ Prevent duplicate updates
+            const booking = await Booking.findById(bookingId);
 
-            console.log("✅ UPDATED BOOKING:", updatedBooking);
+            if (!booking) {
+                console.error("❌ Booking not found");
+                return response.json({ received: true });
+            }
 
-            // ✅ 4. Trigger email event
+            if (booking.isPaid) {
+                console.log("⚠️ Already paid (duplicate webhook)");
+                return response.json({ received: true });
+            }
+
+            // ✅ Update booking
+            booking.isPaid = true;
+            booking.paymentLink = "";
+            await booking.save();
+
+            console.log("✅ Payment marked as successful");
+
+            // ✅ Trigger email / event
             await inngest.send({
                 name: "app/show.booked",
                 data: { bookingId }
             });
         }
 
+        // ✅ Always respond to Stripe
         response.json({ received: true });
 
     } catch (error) {
-        console.error("❌ Webhook Processing Error:", error.message);
+        console.error("❌ Webhook processing error:", error.message);
         response.status(500).send("Internal Server Error");
     }
 };
